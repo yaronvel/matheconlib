@@ -423,116 +423,29 @@ lemma payoffPath_nodup {b : Blockchain n} (hw : b.WellFormed) (m : Miner n)
 ## Payoff is at most miner count (hence at most win count)
 -/
 
-/-- Indicator that index `i` is in-range, at least `lo`, and mined by `m`. -/
-private def minedFrom (b : Blockchain n) (m : Miner n) (lo i : Nat) : Bool :=
-  if h : i < b.blocks.length then decide (lo ≤ i) && minedBy m b.blocks[i] else false
+/-- Number of blocks mined by `m` at indices greater than or equal to `idx`. -/
+private def minerCountFrom (b : Blockchain n) (m : Miner n) (idx : Nat) : Nat :=
+  (b.blocks.drop idx).countP (minedBy m)
 
-/-- Disjoint `countP` additivity for `||`. -/
-private lemma countP_or_disjoint {α : Type*} (p q : α → Bool) (l : List α)
-    (h : ∀ x ∈ l, ¬ (p x = true ∧ q x = true)) :
-    l.countP (fun x => p x || q x) = l.countP p + l.countP q := by
-  induction l with
-  | nil => simp
-  | cons a as ih =>
-      simp only [List.countP_cons, List.mem_cons, forall_eq_or_imp] at h ⊢
-      have ih' := ih h.2
-      cases hp : p a <;> cases hq : q a <;> simp_all <;> omega
+/-- Moving the lower index forward cannot increase the count. -/
+private lemma minerCountFrom_mono (b : Blockchain n) (m : Miner n) {i j : Nat}
+    (h : i ≤ j) :
+    minerCountFrom b m j ≤ minerCountFrom b m i :=
+  (List.drop_sublist_drop_left b.blocks h).countP_le
 
-/-- `minedFrom lo` splits into the point mass at `lo` and `minedFrom (lo+1)`. -/
-private lemma minedFrom_split (b : Blockchain n) (m : Miner n) (lo i : Nat)
-    (hlo : lo < b.blocks.length) :
-    minedFrom b m lo i =
-      ((decide (i = lo) && minedBy m b.blocks[lo]) || minedFrom b m (lo + 1) i) := by
-  simp only [minedFrom]
-  by_cases hi : i < b.blocks.length
-  · simp only [hi, ↓reduceDIte]
-    by_cases hEq : i = lo
-    · subst hEq
-      simp
-    · by_cases hle : lo ≤ i
-      · have hle' : lo + 1 ≤ i := by omega
-        simp [hEq, hle, hle']
-      · simp [hEq, hle, show ¬lo + 1 ≤ i by omega]
-  · simp only [hi, ↓reduceDIte]
-    have : i ≠ lo := fun hEq => hi (hEq ▸ hlo)
-    simp [this]
+/-- Split off the block at the current index. -/
+private lemma minerCountFrom_step (b : Blockchain n) (m : Miner n) (idx : Nat)
+    (hidx : idx < b.blocks.length) :
+    minerCountFrom b m idx =
+      (if minedBy m b.blocks[idx] then 1 else 0) + minerCountFrom b m (idx + 1) := by
+  unfold minerCountFrom
+  rw [← List.getElem_cons_drop hidx, List.countP_cons]
+  omega
 
-/-- Splitting off the `lo` indicator from the `≥ lo` count. -/
-private lemma countP_minedFrom_succ (b : Blockchain n) (m : Miner n) {lo : Nat}
-    (hlo : lo < b.blocks.length) :
-    (List.range b.blocks.length).countP (minedFrom b m lo) =
-      (if minedBy m b.blocks[lo] then 1 else 0) +
-        (List.range b.blocks.length).countP (minedFrom b m (lo + 1)) := by
-  have hsplit := List.countP_congr (l := List.range b.blocks.length)
-    (p := minedFrom b m lo)
-    (q := fun i => (decide (i = lo) && minedBy m b.blocks[lo]) || minedFrom b m (lo + 1) i)
-    (fun i _ => by rw [minedFrom_split b m lo i hlo])
-  rw [hsplit, countP_or_disjoint]
-  · have hpt :
-        (List.range b.blocks.length).countP
-            (fun i => decide (i = lo) && minedBy m b.blocks[lo]) =
-          if minedBy m b.blocks[lo] then 1 else 0 := by
-      cases hm : minedBy m b.blocks[lo]
-      · change (List.range b.blocks.length).countP (fun i => decide (i = lo) && false) = 0
-        simp
-      · change (List.range b.blocks.length).countP (fun i => decide (i = lo) && true) = 1
-        have hcongr := List.countP_congr (l := List.range b.blocks.length)
-          (p := fun i => decide (i = lo) && true)
-          (q := fun i => i == lo)
-          (fun i _ => by simp [beq_iff_eq])
-        rw [hcongr, ← List.count_eq_countP, List.count_range]
-        simp [hlo]
-    rw [hpt]
-  · intro x _hx
-    rintro ⟨hp, hq⟩
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at hp
-    obtain ⟨rfl, _⟩ := hp
-    simp [minedFrom, hlo] at hq
-
-/-- Raising the lower bound can only drop counted indices. -/
-private lemma countP_minedFrom_mono (b : Blockchain n) (m : Miner n) {lo lo' : Nat}
-    (h : lo ≤ lo') :
-    (List.range b.blocks.length).countP (minedFrom b m lo') ≤
-      (List.range b.blocks.length).countP (minedFrom b m lo) := by
-  refine List.countP_mono_left ?_
-  intro i _hi
-  simp only [minedFrom]
-  split_ifs with hlt
-  · intro h'
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at h' ⊢
-    exact ⟨le_trans h h'.1, h'.2⟩
-  · intro h'; cases h'
-
-/-- Index-wise `countP` agrees with direct `countP` on a list. -/
-private lemma countP_eq_countP_getElem_range {α : Type*} (p : α → Bool) (l : List α) :
-    l.countP p =
-      (List.range l.length).countP
-        (fun i => if h : i < l.length then p l[i] else false) := by
-  induction l with
-  | nil => simp
-  | cons a as ih =>
-      simp only [List.countP_cons, List.length_cons, List.range_succ_eq_map, List.countP_cons,
-        List.countP_map, List.getElem_cons_zero]
-      have htail :
-          (List.range as.length).countP
-              ((fun i => if h : i < as.length + 1 then p (a :: as)[i] else false) ∘ Nat.succ) =
-            (List.range as.length).countP
-              (fun i => if h : i < as.length then p as[i] else false) := by
-        refine List.countP_congr ?_
-        intro i hi
-        simp only [List.mem_range] at hi
-        simp [Function.comp, hi, List.getElem_cons_succ]
-      rw [show (if h : 0 < as.length + 1 then p a else false) = p a by simp, htail, ← ih]
-
-/-- `minerCount` equals the `minedFrom 0` count over all indices. -/
-private lemma minerCount_eq_countP_minedFrom (b : Blockchain n) (m : Miner n) :
-    b.minerCount m = (List.range b.blocks.length).countP (minedFrom b m 0) := by
-  simp only [Blockchain.minerCount]
-  refine (countP_eq_countP_getElem_range (minedBy m) b.blocks).trans ?_
-  refine List.countP_congr ?_
-  intro i hi
-  simp only [List.mem_range] at hi
-  simp [minedFrom, hi]
+/-- The full miner count is the count from index `0`. -/
+private lemma minerCountFrom_zero (b : Blockchain n) (m : Miner n) :
+    minerCountFrom b m 0 = b.minerCount m := by
+  simp [minerCountFrom, Blockchain.minerCount]
 
 /-- Recursive payoff component equals the third field of an `earliestLongest` hit. -/
 private lemma earliestLongest_payoff_eq (b : Blockchain n) (m : Miner n) (fuel : Nat)
@@ -551,14 +464,13 @@ private lemma earliestLongest_payoff_eq (b : Blockchain n) (m : Miner n) (fuel :
   subst hc_eq
   exact ⟨hcp_eq.symm, hcidx⟩
 
-/-- On a well-formed chain, `payoffAux` never exceeds the `m`-block count at or after `idx`. -/
-private lemma payoffAux_le_countP_minedFrom (b : Blockchain n) (hw : b.WellFormed)
+/-- On a well-formed chain, `payoffAux` never exceeds `minerCountFrom` at `idx`. -/
+private lemma payoffAux_le_minerCountFrom (b : Blockchain n) (hw : b.WellFormed)
     (m : Miner n) :
     ∀ fuel idx,
       idx < b.blocks.length →
       b.blocks.length - idx ≤ fuel →
-      (Blockchain.payoff.payoffAux b m fuel idx).2.2 ≤
-        (List.range b.blocks.length).countP (minedFrom b m idx) := by
+      (Blockchain.payoff.payoffAux b m fuel idx).2.2 ≤ minerCountFrom b m idx := by
   intro fuel
   induction fuel with
   | zero =>
@@ -576,16 +488,11 @@ private lemma payoffAux_le_countP_minedFrom (b : Blockchain n) (hw : b.WellForme
             let rest := Blockchain.payoff.payoffAux b m fuel cidx
             (cidx, rest.1, rest.2.2)) with
       | none =>
-          have hx : minedFrom b m idx idx = minedBy m block := by
-            simp [minedFrom, hidx, block]
-          have hsingle :
-              (if minedBy m block then 1 else 0) ≤
-                (List.range b.blocks.length).countP (minedFrom b m idx) := by
-            cases hm : minedBy m block
-            · simp
-            · refine (List.one_le_countP_iff (p := minedFrom b m idx)).mpr ?_
-              exact ⟨idx, List.mem_range.mpr hidx, by simp [hx, hm]⟩
-          simpa [hown] using hsingle
+          -- Payoff is just `own`, which is bounded by the count from `idx`.
+          have hstep := minerCountFrom_step b m idx hidx
+          cases hm : minedBy m block
+          · simp [hown, hm]
+          · simp [hown, hm, block, hstep]
       | some p =>
           obtain ⟨c, cl, cp⟩ := p
           obtain ⟨hcp_eq, hc_mem⟩ := earliestLongest_payoff_eq b m fuel block.children hbest
@@ -593,31 +500,25 @@ private lemma payoffAux_le_countP_minedFrom (b : Blockchain n) (hw : b.WellForme
           have ⟨hlt, hc_lt⟩ := hch idx c hidx (by simpa [block] using hc_mem)
           have hfuel' : b.blocks.length - c ≤ fuel := by omega
           have hcp := ih c hc_lt hfuel'
-          -- Rewrite the recursive payoff component, then bound.
-          have hsplit := countP_minedFrom_succ b m hidx
-          have hmono := countP_minedFrom_mono b m (lo := idx + 1) (lo' := c)
-            (Nat.succ_le_of_lt hlt)
+          have hmono := minerCountFrom_mono b m (Nat.succ_le_of_lt hlt)
+          have hstep := minerCountFrom_step b m idx hidx
           calc
             own + cp
                 = own + (Blockchain.payoff.payoffAux b m fuel c).2.2 := by rw [hcp_eq]
-            _ ≤ (if minedBy m block then 1 else 0) +
-                  (List.range b.blocks.length).countP (minedFrom b m c) := by
-                    simpa [hown] using Nat.add_le_add_left hcp own
-            _ ≤ (if minedBy m block then 1 else 0) +
-                  (List.range b.blocks.length).countP (minedFrom b m (idx + 1)) :=
-                Nat.add_le_add_left hmono (if minedBy m block then 1 else 0)
-            _ = (List.range b.blocks.length).countP (minedFrom b m idx) := by
-                  simpa [block] using hsplit.symm
+            _ ≤ (if minedBy m block then 1 else 0) + minerCountFrom b m c := by
+                  simpa [hown] using Nat.add_le_add_left hcp own
+            _ ≤ (if minedBy m block then 1 else 0) + minerCountFrom b m (idx + 1) :=
+                Nat.add_le_add_left hmono _
+            _ = minerCountFrom b m idx := by
+                  simpa [block] using hstep.symm
 
 /-- On a well-formed chain, miner payoff from any in-range node is at most `minerCount`. -/
 theorem payoff_le_minerCount {b : Blockchain n} (hw : b.WellFormed) (m : Miner n)
     {idx : Nat} (hidx : idx < b.blocks.length) :
     (b.payoff m idx).2.2 ≤ b.minerCount m := by
   have hfuel : b.blocks.length - idx ≤ b.blocks.length := by omega
-  have h := payoffAux_le_countP_minedFrom b hw m b.blocks.length idx hidx hfuel
-  refine h.trans ?_
-  rw [minerCount_eq_countP_minedFrom]
-  exact countP_minedFrom_mono b m (Nat.zero_le _)
+  have h := payoffAux_le_minerCountFrom b hw m b.blocks.length idx hidx hfuel
+  exact h.trans <| (minerCountFrom_mono b m (Nat.zero_le idx)).trans_eq (minerCountFrom_zero b m)
 
 /-- After any finite execution, strategy-sequence payoff is at most lottery wins. -/
 theorem strategySequencePayoff_le_winCount (σ : MinerStrategyProfile n) (k : Nat)
