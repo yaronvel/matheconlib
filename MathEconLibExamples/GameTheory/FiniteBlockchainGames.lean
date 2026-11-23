@@ -56,11 +56,12 @@ structure Block (n : Nat) where
 /-- A blockchain as a flat block list; genesis is `blocks[0]`. -/
 structure Blockchain (n : Nat) where
   blocks : List (Block n)
-  deriving Repr
+  nonempty : blocks ≠ []
 
 /-- Initialize a blockchain containing only genesis. -/
 def Blockchain.initial (n : Nat) : Blockchain n :=
-  { blocks := [{ miner := none, children := [] }] }
+  { blocks := [{ miner := none, children := [] }]
+    nonempty := by simp }
 
 abbrev Bitcoin :=
   Blockchain.initial n
@@ -79,7 +80,10 @@ def step (σ : MinerStrategyProfile n) (b : Blockchain n) (miner : Miner n) :
   let newIdx := b.blocks.length
   let newNode : Block n := { miner := some miner, children := [] }
   let parent' : Block n := { parent with children := parent.children ++ [newIdx] }
-  { blocks := b.blocks.set parentIdx.val parent' ++ [newNode] }
+  {
+    blocks := b.blocks.set parentIdx.val parent' ++ [newNode]
+    nonempty := by simp
+  }
 
 /-- Finite execution of length `k`. At each step the fair lottery supplies the
 winning miner in `draws`; that miner attaches a block to the parent chosen by
@@ -557,6 +561,7 @@ def exampleForkChain : Blockchain 3 where
     { miner := some 1, children := [] },
     { miner := some 2, children := [] }
   ]
+  nonempty := by simp
 
 example : (exampleForkChain.payoff (0 : Fin 3) 0).2.2 = 2 := by decide
 example : (exampleForkChain.payoff (1 : Fin 3) 0).2.2 = 1 := by decide
